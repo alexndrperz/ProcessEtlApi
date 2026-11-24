@@ -1,20 +1,23 @@
 using System.Diagnostics;
+using AnalisisOpiniones.Etl.Core.Dimensiones;
 using AnalisisOpiniones.Etl.Core.Interfaces;
 using Microsoft.Extensions.Options;
 
 namespace AnalisisOpiniones.Etl.Worker
 {
-    public class ExtraccionWorker : BackgroundService
+    public class EtlWorker : BackgroundService
     {
         private readonly IEnumerable<IExtractor> _extractores;
+        private readonly IEnumerable<IDimensionLoader> _dimensiones;
         private readonly WorkerOptions _options;
         private readonly IHostApplicationLifetime _lifetime;
-        private readonly ILogger<ExtraccionWorker> _logger;
+        private readonly ILogger<EtlWorker> _logger;
 
-        public ExtraccionWorker(IEnumerable<IExtractor> extractores, IOptions<WorkerOptions> options,
-            IHostApplicationLifetime lifetime, ILogger<ExtraccionWorker> logger)
+        public EtlWorker(IEnumerable<IExtractor> extractores, IEnumerable<IDimensionLoader> dimensiones,
+            IOptions<WorkerOptions> options, IHostApplicationLifetime lifetime, ILogger<EtlWorker> logger)
         {
             _extractores = extractores;
+            _dimensiones = dimensiones;
             _options = options.Value;
             _lifetime = lifetime;
             _logger = logger;
@@ -25,11 +28,12 @@ namespace AnalisisOpiniones.Etl.Worker
             while (!stoppingToken.IsCancellationRequested)
             {
                 await EjecutarExtraccionAsync(stoppingToken);
+                await EjecutarCargaDimensionesAsync(stoppingToken);
 
                 if (_options.IntervaloMinutos <= 0)
                     break;
 
-                _logger.LogInformation("Próxima extracción en {Minutos} minutos.", _options.IntervaloMinutos);
+                _logger.LogInformation("Próxima ejecución en {Minutos} minutos.", _options.IntervaloMinutos);
                 await Task.Delay(TimeSpan.FromMinutes(_options.IntervaloMinutos), stoppingToken);
             }
 
@@ -81,6 +85,51 @@ namespace AnalisisOpiniones.Etl.Worker
             {
                 _logger.LogError(ex, "{Fuente}: error durante la extracción después de {Ms} ms.", extractor.Nombre, reloj.ElapsedMilliseconds);
                 return (false, 0);
+            }
+        }
+
+        private async Task EjecutarCargaDimensionesAsync(CancellationToken cancellationToken)
+        {
+            var dimensiones = _dimensiones.ToList();
+            if (dimensiones.Count == 0)
+            {
+                _logger.LogWarning("La carga de dimensiones está deshabilitada en la configuración.");
+                return;
+            }
+
+            _logger.LogInformation("Iniciando carga de {Cantidad} dimensiones: {Dimensiones}",
+                dimensiones.Count, string.Join(", ", dimensiones.Select(d => d.Nombre)));
+
+            var total = Stopwatch.StartNew();
+            var resultados = await Task.WhenAll(dimensiones.Select(d => CargarDimensionAsync(d, cancellationToken)));
+            total.Stop();
+
+            var correctas = resultados.OfType<ResultadoCarga>().ToList();
+            _logger.LogInformation("Carga de dimensiones finalizada en {Ms} ms: {Ok} correctas, {Error} con error, {Insertadas} filas insertadas y {Actualizadas} actualizadas.",
+                total.ElapsedMilliseconds, correctas.Count, resultados.Length - correctas.Count,
+                correctas.Sum(r => r.Insertadas), correctas.Sum(r => r.Actualizadas));
+        }
+
+        private async Task<ResultadoCarga?> CargarDimensionAsync(IDimensionLoader dimension, CancellationToken cancellationToken)
+        {
+            var reloj = Stopwatch.StartNew();
+            try
+            {
+                _logger.LogInformation("{Dimension}: cargando...", dimension.Nombre);
+                var resultado = await dimension.CargarAsync(cancellationToken);
+                _logger.LogInformation("{Dimension}: {Leidas} leídas, {Insertadas} insertadas, {Actualizadas} actualizadas y {SinCambios} sin cambios en {Ms} ms.",
+                    dimension.Nombre, resultado.Leidas, resultado.Insertadas, resultado.Actualizadas, resultado.SinCambios, reloj.ElapsedMilliseconds);
+                return resultado;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("{Dimension}: carga cancelada.", dimension.Nombre);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Dimension}: error durante la carga después de {Ms} ms.", dimension.Nombre, reloj.ElapsedMilliseconds);
+                return null;
             }
         }
     }

@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using AnalisisOpiniones.Etl.Core.Interfaces;
+using AnalisisOpiniones.Etl.Infrastructure.DataWarehouse;
+using AnalisisOpiniones.Etl.Infrastructure.Dimensiones;
 using AnalisisOpiniones.Etl.Infrastructure.Extractors;
 using AnalisisOpiniones.Etl.Infrastructure.Options;
 using AnalisisOpiniones.Etl.Infrastructure.Repositories;
@@ -43,6 +45,25 @@ namespace AnalisisOpiniones.Etl.Infrastructure
                 });
                 services.AddSingleton<IExtractor, ApiExtractor>();
             }
+
+            return services;
+        }
+
+        public static IServiceCollection AddCargaDimensiones(this IServiceCollection services, IConfiguration configuration)
+        {
+            services.Configure<CargaOptions>(configuration.GetSection(CargaOptions.Seccion));
+
+            var carga = configuration.GetSection(CargaOptions.Seccion).Get<CargaOptions>() ?? new CargaOptions();
+            if (!carga.Habilitado)
+                return services;
+
+            services.AddSingleton<IDimensionWriter, SqlDimensionWriter>();
+            services.AddSingleton<IDimensionLoader, DimClienteLoader>();
+            services.AddSingleton<IDimensionLoader, DimProductoLoader>();
+            services.AddSingleton<IDimensionLoader, DimFuenteLoader>();
+            services.AddSingleton<IDimensionLoader, DimCanalLoader>();
+            services.AddSingleton<IDimensionLoader, DimClasificacionLoader>();
+            services.AddSingleton<IDimensionLoader, DimFechaLoader>();
 
             return services;
         }

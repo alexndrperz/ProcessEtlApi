@@ -1,5 +1,6 @@
 using System.Data;
 using AnalisisOpiniones.Etl.Core.Interfaces;
+using AnalisisOpiniones.Etl.Infrastructure.Comun;
 using AnalisisOpiniones.Etl.Infrastructure.Options;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
@@ -24,7 +25,7 @@ namespace AnalisisOpiniones.Etl.Infrastructure.Staging
 
         public async Task GuardarAsync<T>(string tabla, IReadOnlyCollection<T> filas, CancellationToken cancellationToken)
         {
-            var datos = ConvertirATabla(filas);
+            var datos = TablaDatos.Crear(filas);
 
             await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken);
@@ -45,20 +46,6 @@ namespace AnalisisOpiniones.Etl.Infrastructure.Staging
 
             await transaction.CommitAsync(cancellationToken);
             _logger.LogInformation("{Tabla}: {Filas} filas guardadas en staging.", tabla, filas.Count);
-        }
-
-        private static DataTable ConvertirATabla<T>(IEnumerable<T> filas)
-        {
-            var propiedades = typeof(T).GetProperties();
-            var tabla = new DataTable();
-
-            foreach (var p in propiedades)
-                tabla.Columns.Add(p.Name, Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType);
-
-            foreach (var fila in filas)
-                tabla.Rows.Add(propiedades.Select(p => p.GetValue(fila) ?? DBNull.Value).ToArray());
-
-            return tabla;
         }
     }
 }
